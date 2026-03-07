@@ -1,0 +1,24 @@
+# Git
+.git
+.gitignore
+
+# Gradle (but keep wrapper)
+.gradle
+build/
+
+# IDE
+.idea
+.vscode
+*.iml
+
+# Data
+data/
+
+# Environment
+.env
+
+# Logs
+*.log
+
+# Android app (if building from root)
+app/

@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Faucet History - Unicity</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 28px;
+        }
+
+        .back-link {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .auth-section {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .auth-section input {
+            width: 100%;
+            max-width: 400px;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+
+        .auth-section button {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .auth-section button:hover {
+            opacity: 0.9;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        th {
+            background: #f8f9ff;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        td {
+            font-size: 14px;
+            color: #666;
+        }
+
+        tr:hover {
+            background: #f8f9ff;
+        }
+
+        .status {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        .pagination button {
+            padding: 8px 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination span {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .alert-error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .pubkey {
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Faucet History</h1>
+            <a href="/faucet/index.html" class="back-link">← Back to Faucet</a>
+        </div>
+
+        <div id="authSection" class="auth-section">
+            <h2 style="margin-bottom: 20px; color: #333;">Enter API Key</h2>
+            <div>
+                <input
+                    type="password"
+                    id="apiKeyInput"
+                    placeholder="Enter API key to view history"
+                    autocomplete="off"
+                >
+                <br>
+                <button onclick="authenticate()">Access History</button>
+            </div>
+            <div id="authError" class="alert alert-error hidden"></div>
+        </div>
+
+        <div id="historySection" class="hidden">
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalRequests">-</div>
+                    <div class="stat-label">Total Requests</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="successCount">-</div>
+                    <div class="stat-label">Successful</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="failedCount">-</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Unicity ID</th>
+                            <th>Coin</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                            <th>Recipient Pubkey</th>
+                            <th>Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody">
+                        <tr>
+                            <td colspan="7" class="loading">Loading...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination">
+                <button id="prevBtn" onclick="previousPage()" disabled>Previous</button>
+                <span id="pageInfo">Page 1</span>
+                <button id="nextBtn" onclick="nextPage()">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let apiKey = null;
+        let currentPage = 0;
+        let pageSize = 50;
+        let totalCount = 0;
+
+        // Authenticate with API key
+        async function authenticate() {
+            const input = document.getElementById('apiKeyInput');
+            const key = input.value.trim();
+
+            if (!key) {
+                showAuthError('Please enter an API key');
+                return;
+            }
+
+            apiKey = key;
+
+            // Try to load history
+            try {
+                await loadHistory();
+
+                // Hide auth section, show history
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('historySection').classList.remove('hidden');
+            } catch (error) {
+                apiKey = null;
+                showAuthError('Invalid API key or server error');
+            }
+        }
+
+        // Show authentication error
+        function showAuthError(message) {
+            const errorDiv = document.getElementById('authError');
+            errorDiv.textContent = message;
+            errorDiv.classList.remove('hidden');
+
+            setTimeout(() => {
+                errorDiv.classList.add('hidden');
+            }, 5000);
+        }
+
+        // Load history from API
+        async function loadHistory() {
+            const offset = currentPage * pageSize;
+
+            const response = await fetch(
+                `/api/v1/faucet/history?limit=${pageSize}&offset=${offset}`,
+                {
+                    headers: {
+                        'X-API-Key': apiKey
+                    }
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error('Failed to load history');
+            }
+
+            const data = await response.json();
+
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to load history');
+            }
+
+            totalCount = data.data.pagination.total;
+
+            renderHistory(data.data.requests);
+            updateStats(data.data.requests);
+            updatePagination();
+        }
+
+        // Render history table
+        function renderHistory(requests) {
+            const tbody = document.getElementById('historyTableBody');
+            tbody.innerHTML = '';
+
+            if (requests.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #999;">No requests found</td></tr>';
+                return;
+            }
+
+            requests.forEach(req => {
+                const row = document.createElement('tr');
+
+                const statusClass = req.status === 'SUCCESS' ? 'status-success' :
+                                  req.status === 'FAILED' ? 'status-failed' : 'status-pending';
+
+                const timestamp = new Date(req.timestamp);
+                const timeStr = timestamp.toLocaleString();
+
+                row.innerHTML = `
+                    <td>${req.id}</td>
+                    <td><strong>${req.unicityId}</strong></td>
+                    <td>${req.coinSymbol}</td>
+                    <td>${req.amount}</td>
+                    <td><span class="status ${statusClass}">${req.status}</span></td>
+                    <td class="pubkey" title="${req.recipientNostrPubkey || 'N/A'}">
+                        ${req.recipientNostrPubkey ? req.recipientNostrPubkey.substring(0, 16) + '...' : 'N/A'}
+                    </td>
+                    <td class="timestamp">${timeStr}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        // Update statistics
+        function updateStats(requests) {
+            const successCount = requests.filter(r => r.status === 'SUCCESS').length;
+            const failedCount = requests.filter(r => r.status === 'FAILED').length;
+
+            document.getElementById('totalRequests').textContent = totalCount;
+            document.getElementById('successCount').textContent = successCount;
+            document.getElementById('failedCount').textContent = failedCount;
+        }
+
+        // Update pagination controls
+        function updatePagination() {
+            const totalPages = Math.ceil(totalCount / pageSize);
+            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages}`;
+
+            document.getElementById('prevBtn').disabled = currentPage === 0;
+            document.getElementById('nextBtn').disabled = (currentPage + 1) >= totalPages;
+        }
+
+        // Navigate to previous page
+        async function previousPage() {
+            if (currentPage > 0) {
+                currentPage--;
+                await loadHistory();
+            }
+        }
+
+        // Navigate to next page
+        async function nextPage() {
+            const totalPages = Math.ceil(totalCount / pageSize);
+            if (currentPage + 1 < totalPages) {
+                currentPage++;
+                await loadHistory();
+            }
+        }
+
+        // Handle Enter key in API key input
+        document.getElementById('apiKeyInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                authenticate();
+            }
+        });
+    </script>
+</body>
+</html>

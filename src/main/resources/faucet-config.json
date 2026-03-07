@@ -1,0 +1,18 @@
+{
+  "registryUrl": "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json",
+  "nostrRelay": "wss://nostr-relay.testnet.unicity.network",
+  "aggregatorUrl": "https://goggregator-test.unicity.network",
+  "aggregatorApiKey": "your-api-key-here",
+  "faucetMnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "defaultAmount": 1000,
+  "defaultCoin": "solana",
+  "notes": {
+    "registryUrl": "URL to unicity-ids registry JSON (defines token type and all coins)",
+    "nostrRelay": "WebSocket URL of the Nostr relay for P2P messaging",
+    "aggregatorUrl": "URL of the Unicity aggregator service",
+    "aggregatorApiKey": "API key for aggregator/payment gateway. Can be overridden via AGGREGATOR_API_KEY env var",
+    "faucetMnemonic": "BIP-39 mnemonic phrase for faucet identity. Keep this secure!",
+    "defaultAmount": "Default token amount if not specified via CLI",
+    "defaultCoin": "Default coin name (e.g., 'solana', 'bitcoin', 'ethereum') if not specified"
+  }
+}

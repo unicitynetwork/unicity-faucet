@@ -1,0 +1,44 @@
+services:
+  faucet:
+    build:
+      context: ..
+      dockerfile: faucet/Dockerfile
+      network: host
+    container_name: unicity-faucet
+    ports:
+      - "8081:8080"
+    environment:
+      # Data directory inside container
+      DATA_DIR: /app/data
+
+      # API key for history access (CHANGE THIS IN PRODUCTION!)
+      FAUCET_API_KEY: ${FAUCET_API_KEY:-your-secret-api-key-here}
+
+      # API key for aggregator/payment gateway (overrides faucet-config.json)
+      AGGREGATOR_API_KEY: ${AGGREGATOR_API_KEY:-}
+
+      # BIP-39 mnemonic phrase for faucet wallet (CHANGE THIS IN PRODUCTION!)
+      FAUCET_MNEMONIC: ${FAUCET_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+
+      # Server port
+      PORT: 8080
+
+    volumes:
+      # Mount data directory for persistence
+      - ./data:/app/data
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - faucet-network
+
+networks:
+  faucet-network:
+    driver: bridge
