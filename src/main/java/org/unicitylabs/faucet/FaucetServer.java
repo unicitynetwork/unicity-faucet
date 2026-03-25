@@ -53,7 +53,7 @@ public class FaucetServer {
         app.get("/health", ctx -> ctx.json(Map.of("status", "healthy")));
 
         // Admin endpoints
-        app.post("/api/v1/admin/refresh-registry", this::refreshRegistry);
+        app.post("/api/v1/faucet/admin/refresh-registry", this::refreshRegistry);
 
         // Start server
         app.start(port);
@@ -311,7 +311,7 @@ public class FaucetServer {
     }
 
     /**
-     * POST /api/v1/admin/refresh-registry
+     * POST /api/v1/faucet/admin/refresh-registry
      * Clear registry cache and reload from online source
      * Requires API key
      */
