@@ -271,6 +271,7 @@ public class FaucetCLI implements Callable<Integer> {
 
 
     public static void main(String[] args) {
+        StdioRedirect.install();
         int exitCode = new CommandLine(new FaucetCLI()).execute(args);
         System.exit(exitCode);
     }

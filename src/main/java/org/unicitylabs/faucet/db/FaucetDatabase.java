@@ -5,6 +5,7 @@ import java.sql.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import org.sqlite.SQLiteConfig;
 
 /**
  * Database access layer for faucet requests
@@ -12,6 +13,7 @@ import java.util.List;
 public class FaucetDatabase {
 
     private final String dbPath;
+    private final SQLiteConfig connectionConfig;
 
     public FaucetDatabase(String dataDir) {
         // Create data directory if it doesn't exist
@@ -21,7 +23,15 @@ public class FaucetDatabase {
         }
 
         this.dbPath = "jdbc:sqlite:" + dataDir + "/faucet.db";
+        this.connectionConfig = new SQLiteConfig();
+        connectionConfig.setJournalMode(SQLiteConfig.JournalMode.WAL);
+        connectionConfig.setSynchronous(SQLiteConfig.SynchronousMode.NORMAL);
+        connectionConfig.setBusyTimeout(10000);
         initializeDatabase();
+    }
+
+    private Connection openConnection() throws SQLException {
+        return DriverManager.getConnection(dbPath, connectionConfig.toProperties());
     }
 
     private void initializeDatabase() {
@@ -43,7 +53,7 @@ public class FaucetDatabase {
             "CREATE INDEX IF NOT EXISTS idx_timestamp ON faucet_requests(timestamp DESC);" +
             "CREATE INDEX IF NOT EXISTS idx_unicity_id ON faucet_requests(unicity_id);";
 
-        try (Connection conn = DriverManager.getConnection(dbPath);
+        try (Connection conn = openConnection();
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(createTableSQL);
             System.out.println("✅ Database initialized: " + dbPath);
@@ -62,7 +72,7 @@ public class FaucetDatabase {
             "recipient_nostr_pubkey, token_file_path, status, error_message, timestamp) " +
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-        try (Connection conn = DriverManager.getConnection(dbPath)) {
+        try (Connection conn = openConnection()) {
             // Insert the record
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, request.getUnicityId());
@@ -106,7 +116,7 @@ public class FaucetDatabase {
             "error_message = ? " +
             "WHERE id = ?";
 
-        try (Connection conn = DriverManager.getConnection(dbPath);
+        try (Connection conn = openConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             pstmt.setString(1, request.getRecipientNostrPubkey());
@@ -130,7 +140,7 @@ public class FaucetDatabase {
 
         List<FaucetRequest> requests = new ArrayList<>();
 
-        try (Connection conn = DriverManager.getConnection(dbPath);
+        try (Connection conn = openConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             pstmt.setInt(1, limit);
@@ -152,7 +162,7 @@ public class FaucetDatabase {
     public int getRequestCount() throws SQLException {
         String sql = "SELECT COUNT(*) FROM faucet_requests";
 
-        try (Connection conn = DriverManager.getConnection(dbPath);
+        try (Connection conn = openConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
 

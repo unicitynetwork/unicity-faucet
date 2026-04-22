@@ -235,6 +235,8 @@ public class FaucetService {
             } catch (Exception e) {
                 // Extract clean error message
                 String cleanErrorMsg = extractErrorMessage(e);
+                System.err.println("❌ Faucet request failed: " + cleanErrorMsg);
+                e.printStackTrace();
 
                 // Update status to FAILED
                 if (request != null) {
@@ -244,6 +246,7 @@ public class FaucetService {
                         database.updateRequest(request);
                     } catch (Exception dbEx) {
                         System.err.println("Failed to update request status: " + dbEx.getMessage());
+                        dbEx.printStackTrace();
                     }
                 }
 

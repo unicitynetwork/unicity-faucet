@@ -366,6 +366,7 @@ public class FaucetServer {
      * Main entry point for the server
      */
     public static void main(String[] args) {
+        StdioRedirect.install();
         try {
             // Load configuration
             FaucetConfig config = FaucetConfig.load();
