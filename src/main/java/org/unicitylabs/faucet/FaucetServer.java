@@ -54,6 +54,7 @@ public class FaucetServer {
 
         // Admin endpoints
         app.post("/api/v1/faucet/admin/refresh-registry", this::refreshRegistry);
+        app.get("/api/v1/faucet/admin/stats", this::getStats);
 
         // Start server
         app.start(port);
@@ -68,6 +69,7 @@ public class FaucetServer {
         System.out.println("📍 Endpoints:");
         System.out.println("   Web UI:        http://localhost:" + port + "/faucet/index.html");
         System.out.println("   History:       http://localhost:" + port + "/faucet/history/index.html");
+        System.out.println("   Admin:         http://localhost:" + port + "/faucet/admin/index.html");
         System.out.println("   API:           http://localhost:" + port + "/api/v1/faucet/");
         System.out.println();
     }
@@ -349,6 +351,113 @@ public class FaucetServer {
                     "error", "Failed to refresh registry: " + e.getMessage()
             ));
         }
+    }
+
+    /**
+     * GET /api/v1/faucet/admin/stats?bucket=minute|hour|day&window=24h
+     * Returns aggregate stats: time series, top nametags/coins/errors, summary tiles.
+     * Requires API key.
+     */
+    private void getStats(Context ctx) {
+        String requestApiKey = ctx.header("X-API-Key");
+        if (requestApiKey == null || !requestApiKey.equals(apiKey)) {
+            ctx.status(401).json(Map.of(
+                    "success", false,
+                    "error", "Unauthorized: Invalid or missing API key"
+            ));
+            return;
+        }
+
+        try {
+            String bucketParam = ctx.queryParam("bucket");
+            String windowParam = ctx.queryParam("window");
+            long bucketSeconds = parseBucket(bucketParam);
+            long windowSeconds = parseWindow(windowParam);
+            long now = java.time.Instant.now().getEpochSecond();
+            long since = now - windowSeconds;
+
+            var db = faucetService.getDatabase();
+
+            List<org.unicitylabs.faucet.db.FaucetDatabase.TimeSeriesPoint> points =
+                    db.getTimeSeries(bucketSeconds, since);
+
+            List<Map<String, Object>> series = new java.util.ArrayList<>();
+            for (var p : points) {
+                Map<String, Object> row = new HashMap<>();
+                row.put("bucket", p.bucket);
+                row.put("coin", p.coinSymbol);
+                row.put("status", p.status);
+                row.put("count", p.count);
+                row.put("totalAmount", p.totalAmount);
+                series.add(row);
+            }
+
+            ctx.json(Map.of(
+                    "success", true,
+                    "data", Map.ofEntries(
+                            Map.entry("bucketSeconds", bucketSeconds),
+                            Map.entry("windowSeconds", windowSeconds),
+                            Map.entry("now", now),
+                            Map.entry("since", since),
+                            Map.entry("summary", db.getSummary(since)),
+                            Map.entry("timeseries", series),
+                            Map.entry("topNametags", toCountedList(db.getTopNametags(20, since))),
+                            Map.entry("topCoins", toCountedList(db.getTopCoins(since))),
+                            Map.entry("topErrors", toCountedList(db.getTopErrors(10, since))),
+                            Map.entry("highVolumeNametags",
+                                    toCountedList(db.getHighVolumeNametags(10, since)))
+                    )
+            ));
+        } catch (Exception e) {
+            System.err.println("❌ Failed to load stats: " + e.getMessage());
+            e.printStackTrace();
+            ctx.status(500).json(Map.of(
+                    "success", false,
+                    "error", "Failed to load stats: " + e.getMessage()
+            ));
+        }
+    }
+
+    private long parseBucket(String bucket) {
+        if (bucket == null) return 60L;
+        switch (bucket.toLowerCase()) {
+            case "minute": return 60L;
+            case "hour":   return 3600L;
+            case "day":    return 86400L;
+            default:
+                try {
+                    long n = Long.parseLong(bucket);
+                    return (n >= 60 && n <= 86400) ? n : 60L;
+                } catch (NumberFormatException e) {
+                    return 60L;
+                }
+        }
+    }
+
+    private long parseWindow(String window) {
+        if (window == null) return 24 * 3600L;
+        String w = window.trim().toLowerCase();
+        try {
+            if (w.endsWith("h")) return Long.parseLong(w.substring(0, w.length() - 1)) * 3600L;
+            if (w.endsWith("d")) return Long.parseLong(w.substring(0, w.length() - 1)) * 86400L;
+            if (w.endsWith("m")) return Long.parseLong(w.substring(0, w.length() - 1)) * 60L;
+            return Long.parseLong(w);
+        } catch (NumberFormatException e) {
+            return 24 * 3600L;
+        }
+    }
+
+    private List<Map<String, Object>> toCountedList(
+            List<org.unicitylabs.faucet.db.FaucetDatabase.Counted> in) {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (var c : in) {
+            Map<String, Object> row = new HashMap<>();
+            row.put("key", c.key);
+            row.put("count", c.count);
+            row.put("totalAmount", c.totalAmount);
+            out.add(row);
+        }
+        return out;
     }
 
     /**

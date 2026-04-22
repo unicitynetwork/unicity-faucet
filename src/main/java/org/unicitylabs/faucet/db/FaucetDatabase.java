@@ -4,7 +4,9 @@ import java.io.File;
 import java.sql.*;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.sqlite.SQLiteConfig;
 
 /**
@@ -188,5 +190,189 @@ public class FaucetDatabase {
         request.setErrorMessage(rs.getString("error_message"));
         request.setTimestamp(Instant.ofEpochSecond(rs.getLong("timestamp")));
         return request;
+    }
+
+    public static class TimeSeriesPoint {
+        public final long bucket;
+        public final String coinSymbol;
+        public final String status;
+        public final int count;
+        public final double totalAmount;
+
+        public TimeSeriesPoint(long bucket, String coinSymbol, String status, int count, double totalAmount) {
+            this.bucket = bucket;
+            this.coinSymbol = coinSymbol;
+            this.status = status;
+            this.count = count;
+            this.totalAmount = totalAmount;
+        }
+    }
+
+    public static class Counted {
+        public final String key;
+        public final int count;
+        public final double totalAmount;
+
+        public Counted(String key, int count, double totalAmount) {
+            this.key = key;
+            this.count = count;
+            this.totalAmount = totalAmount;
+        }
+    }
+
+    public List<TimeSeriesPoint> getTimeSeries(long bucketSeconds, long sinceEpochSeconds) throws SQLException {
+        String sql =
+            "SELECT (timestamp / ?) * ? AS bucket, coin_symbol, status, " +
+            "COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total " +
+            "FROM faucet_requests " +
+            "WHERE timestamp >= ? " +
+            "GROUP BY bucket, coin_symbol, status " +
+            "ORDER BY bucket ASC";
+
+        List<TimeSeriesPoint> points = new ArrayList<>();
+        try (Connection conn = openConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, bucketSeconds);
+            pstmt.setLong(2, bucketSeconds);
+            pstmt.setLong(3, sinceEpochSeconds);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    points.add(new TimeSeriesPoint(
+                        rs.getLong("bucket"),
+                        rs.getString("coin_symbol"),
+                        rs.getString("status"),
+                        rs.getInt("cnt"),
+                        rs.getDouble("total")
+                    ));
+                }
+            }
+        }
+        return points;
+    }
+
+    public List<Counted> getTopNametags(int limit, long sinceEpochSeconds) throws SQLException {
+        String sql =
+            "SELECT unicity_id, COUNT(*) AS cnt " +
+            "FROM faucet_requests " +
+            "WHERE timestamp >= ? " +
+            "GROUP BY unicity_id " +
+            "ORDER BY cnt DESC " +
+            "LIMIT ?";
+
+        List<Counted> result = new ArrayList<>();
+        try (Connection conn = openConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, sinceEpochSeconds);
+            pstmt.setInt(2, limit);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Counted(rs.getString("unicity_id"), rs.getInt("cnt"), 0));
+                }
+            }
+        }
+        return result;
+    }
+
+    public List<Counted> getTopCoins(long sinceEpochSeconds) throws SQLException {
+        String sql =
+            "SELECT coin_symbol, COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total " +
+            "FROM faucet_requests " +
+            "WHERE timestamp >= ? AND status = 'SUCCESS' " +
+            "GROUP BY coin_symbol " +
+            "ORDER BY cnt DESC";
+
+        List<Counted> result = new ArrayList<>();
+        try (Connection conn = openConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, sinceEpochSeconds);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Counted(
+                        rs.getString("coin_symbol"),
+                        rs.getInt("cnt"),
+                        rs.getDouble("total")
+                    ));
+                }
+            }
+        }
+        return result;
+    }
+
+    public List<Counted> getTopErrors(int limit, long sinceEpochSeconds) throws SQLException {
+        String sql =
+            "SELECT error_message, COUNT(*) AS cnt " +
+            "FROM faucet_requests " +
+            "WHERE timestamp >= ? AND status = 'FAILED' AND error_message IS NOT NULL " +
+            "GROUP BY error_message " +
+            "ORDER BY cnt DESC " +
+            "LIMIT ?";
+
+        List<Counted> result = new ArrayList<>();
+        try (Connection conn = openConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, sinceEpochSeconds);
+            pstmt.setInt(2, limit);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Counted(rs.getString("error_message"), rs.getInt("cnt"), 0));
+                }
+            }
+        }
+        return result;
+    }
+
+    public Map<String, Object> getSummary(long sinceEpochSeconds) throws SQLException {
+        String sql =
+            "SELECT " +
+            "  COUNT(*) AS total, " +
+            "  SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) AS success_count, " +
+            "  SUM(CASE WHEN status = 'FAILED'  THEN 1 ELSE 0 END) AS failed_count, " +
+            "  COUNT(DISTINCT unicity_id) AS unique_nametags " +
+            "FROM faucet_requests " +
+            "WHERE timestamp >= ?";
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        try (Connection conn = openConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, sinceEpochSeconds);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    int total = rs.getInt("total");
+                    int success = rs.getInt("success_count");
+                    int failed = rs.getInt("failed_count");
+                    int unique = rs.getInt("unique_nametags");
+                    summary.put("total", total);
+                    summary.put("success", success);
+                    summary.put("failed", failed);
+                    summary.put("uniqueNametags", unique);
+                    summary.put("successRate", total > 0 ? (double) success / total : 0.0);
+                }
+            }
+        }
+        return summary;
+    }
+
+    public List<Counted> getHighVolumeNametags(int minRequests, long sinceEpochSeconds) throws SQLException {
+        String sql =
+            "SELECT unicity_id, COUNT(*) AS cnt " +
+            "FROM faucet_requests " +
+            "WHERE timestamp >= ? " +
+            "GROUP BY unicity_id " +
+            "HAVING cnt >= ? " +
+            "ORDER BY cnt DESC " +
+            "LIMIT 50";
+
+        List<Counted> result = new ArrayList<>();
+        try (Connection conn = openConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, sinceEpochSeconds);
+            pstmt.setInt(2, minRequests);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Counted(rs.getString("unicity_id"), rs.getInt("cnt"), 0));
+                }
+            }
+        }
+        return result;
     }
 }
