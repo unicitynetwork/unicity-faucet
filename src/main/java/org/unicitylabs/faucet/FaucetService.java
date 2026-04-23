@@ -40,6 +40,10 @@ public class FaucetService {
     private final NostrClient sharedNostrClient;
     private final AtomicBoolean nostrConnected = new AtomicBoolean(false);
 
+    // Cache for nametag → pubkey to avoid pinging relay for the same nametag
+    // during a top-up burst (sphere portal submits one request per coin).
+    private final NametagCache nametagCache;
+
     public FaucetService(FaucetConfig config, String dataDir) throws Exception {
         this.config = config;
         this.dataDir = dataDir;
@@ -67,6 +71,11 @@ public class FaucetService {
 
         // Load token registry
         this.registry = UnicityTokenRegistry.getInstance(config.registryUrl);
+
+        // Nametag resolution cache: TTL 10min default, override via FAUCET_NAMETAG_CACHE_TTL_SEC
+        long cacheTtlMs = resolveNametagCacheTtlMs();
+        this.nametagCache = new NametagCache(cacheTtlMs, 10_000);
+        logger.info("Nametag cache TTL: {}s (max 10000 entries)", cacheTtlMs / 1000);
 
         // Initialize shared Nostr client (stays connected for all requests)
         NostrKeyManager keyManager = NostrKeyManager.fromPrivateKey(faucetPrivateKey);
@@ -160,39 +169,49 @@ public class FaucetService {
                 );
                 long requestId = database.insertRequest(request);
 
-                // Step 1: Resolve nametag to Nostr public key using shared client
+                // Step 1: Resolve nametag to Nostr public key (cache first, then relay)
                 String recipientPubKey;
+                boolean resolvedFromCache;
                 try {
-                    logger.trace("Resolving nametag via Nostr relay: {}", unicityId);
+                    String cachedPubkey = nametagCache.get(unicityId);
+                    if (cachedPubkey != null) {
+                        logger.trace("Nametag cache hit: {} → {}", unicityId, cachedPubkey.substring(0, 16));
+                        recipientPubKey = cachedPubkey;
+                        resolvedFromCache = true;
+                    } else {
+                        resolvedFromCache = false;
+                        logger.trace("Resolving nametag via Nostr relay: {}", unicityId);
 
-                    boolean connectedBefore = sharedNostrClient.isConnected();
-                    if (!connectedBefore) {
-                        logger.warn("Nostr relay NOT connected at query start for nametag '{}'", unicityId);
-                        throw new RuntimeException("Nametag resolution unavailable: Nostr relay disconnected");
-                    }
-
-                    long queryStart = System.currentTimeMillis();
-                    recipientPubKey = sharedNostrClient.queryPubkeyByNametag(unicityId).join();
-                    long elapsedMs = System.currentTimeMillis() - queryStart;
-
-                    if (recipientPubKey == null) {
-                        boolean connectedAfter = sharedNostrClient.isConnected();
-                        // SDK query timeout is configured at 10s (see setQueryTimeoutMs above).
-                        // If we come back null at ~that duration, it was a timeout, not a real miss.
-                        boolean looksLikeTimeout = elapsedMs >= 9_000L;
-                        logger.warn("Nametag resolve returned null for '{}' elapsed={}ms connectedBefore={} connectedAfter={}",
-                                unicityId, elapsedMs, connectedBefore, connectedAfter);
-
-                        if (!connectedAfter) {
-                            throw new RuntimeException("Nametag resolution failed: Nostr relay dropped during query");
+                        boolean connectedBefore = sharedNostrClient.isConnected();
+                        if (!connectedBefore) {
+                            logger.warn("Nostr relay NOT connected at query start for nametag '{}'", unicityId);
+                            throw new RuntimeException("Nametag resolution unavailable: Nostr relay disconnected");
                         }
-                        if (looksLikeTimeout) {
-                            throw new RuntimeException("Nametag resolution timed out (10s): " + unicityId);
+
+                        long queryStart = System.currentTimeMillis();
+                        recipientPubKey = sharedNostrClient.queryPubkeyByNametag(unicityId).join();
+                        long elapsedMs = System.currentTimeMillis() - queryStart;
+
+                        if (recipientPubKey == null) {
+                            boolean connectedAfter = sharedNostrClient.isConnected();
+                            // SDK query timeout is configured at 10s (see setQueryTimeoutMs above).
+                            // If we come back null at ~that duration, it was a timeout, not a real miss.
+                            boolean looksLikeTimeout = elapsedMs >= 9_000L;
+                            logger.warn("Nametag resolve returned null for '{}' elapsed={}ms connectedBefore={} connectedAfter={}",
+                                    unicityId, elapsedMs, connectedBefore, connectedAfter);
+
+                            if (!connectedAfter) {
+                                throw new RuntimeException("Nametag resolution failed: Nostr relay dropped during query");
+                            }
+                            if (looksLikeTimeout) {
+                                throw new RuntimeException("Nametag resolution timed out (10s): " + unicityId);
+                            }
+                            throw new RuntimeException("Nametag not found: " + unicityId);
                         }
-                        throw new RuntimeException("Nametag not found: " + unicityId);
+                        logger.trace("Resolved nametag '{}' → {} (elapsed={}ms)",
+                                unicityId, recipientPubKey.substring(0, 16), elapsedMs);
+                        nametagCache.put(unicityId, recipientPubKey);
                     }
-                    logger.trace("Resolved nametag '{}' → {} (elapsed={}ms)",
-                            unicityId, recipientPubKey.substring(0, 16), elapsedMs);
                     request.setRecipientNostrPubkey(recipientPubKey);
                     database.updateRequest(request);
                 } catch (Exception e) {
@@ -262,7 +281,8 @@ public class FaucetService {
                         recipientPubKey,
                         tokenFilePath,
                         tokenIdHex,
-                        proxyAddressStr
+                        proxyAddressStr,
+                        resolvedFromCache
                 );
 
             } catch (Exception e) {
@@ -293,7 +313,8 @@ public class FaucetService {
                         null,
                         null,
                         null,
-                        null
+                        null,
+                        false
                 );
             }
         });
@@ -334,6 +355,26 @@ public class FaucetService {
         msg = msg.replaceAll("Failed to resolve nametag:\\s*", "");
 
         return msg;
+    }
+
+    private static long resolveNametagCacheTtlMs() {
+        String raw = System.getenv("FAUCET_NAMETAG_CACHE_TTL_SEC");
+        if (raw == null || raw.trim().isEmpty()) {
+            return 600_000L; // 10 minutes default
+        }
+        try {
+            long seconds = Long.parseLong(raw.trim());
+            if (seconds < 0) seconds = 0;
+            return seconds * 1000L;
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid FAUCET_NAMETAG_CACHE_TTL_SEC='{}', falling back to 600s", raw);
+            return 600_000L;
+        }
+    }
+
+    /** Accessor for tests/introspection. */
+    public NametagCache getNametagCache() {
+        return nametagCache;
     }
 
     /**
@@ -407,12 +448,14 @@ public class FaucetService {
         public final String tokenFilePath;
         public final String tokenIdHex;
         public final String proxyAddress;
+        public final boolean resolvedFromCache;
 
         public FaucetRequestResult(boolean success, String message, Long requestId,
                                    String unicityId, String coinName, String coinSymbol,
                                    double amount, String amountInSmallestUnits,
                                    String recipientNostrPubkey, String tokenFilePath,
-                                   String tokenIdHex, String proxyAddress) {
+                                   String tokenIdHex, String proxyAddress,
+                                   boolean resolvedFromCache) {
             this.success = success;
             this.message = message;
             this.requestId = requestId;
@@ -425,6 +468,7 @@ public class FaucetService {
             this.tokenFilePath = tokenFilePath;
             this.tokenIdHex = tokenIdHex;
             this.proxyAddress = proxyAddress;
+            this.resolvedFromCache = resolvedFromCache;
         }
     }
 }

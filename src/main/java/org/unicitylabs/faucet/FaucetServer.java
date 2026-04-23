@@ -184,9 +184,10 @@ public class FaucetServer {
                 long elapsed = System.currentTimeMillis() - reqStart;
 
                 if (result.success) {
-                    logger.info("Faucet OK: unicityId={} coin={} amount={} tokenId={} proxy={} elapsed={}ms",
+                    logger.info("Faucet OK: unicityId={} coin={} amount={} tokenId={} proxy={} resolved={} elapsed={}ms",
                             result.unicityId, result.coinSymbol, result.amount,
-                            result.tokenIdHex, result.proxyAddress, elapsed);
+                            result.tokenIdHex, result.proxyAddress,
+                            result.resolvedFromCache ? "cache" : "nostr", elapsed);
 
                     ctx.json(Map.of(
                             "success", true,
