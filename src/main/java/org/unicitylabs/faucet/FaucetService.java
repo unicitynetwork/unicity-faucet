@@ -160,11 +160,36 @@ public class FaucetService {
                 String recipientPubKey;
                 try {
                     System.out.println("🔍 Resolving nametag via Nostr relay: " + unicityId);
+
+                    boolean connectedBefore = sharedNostrClient.isConnected();
+                    if (!connectedBefore) {
+                        System.err.println("⚠️  Nostr relay NOT connected at query start for nametag '" + unicityId + "'");
+                        throw new RuntimeException("Nametag resolution unavailable: Nostr relay disconnected");
+                    }
+
+                    long queryStart = System.currentTimeMillis();
                     recipientPubKey = sharedNostrClient.queryPubkeyByNametag(unicityId).join();
+                    long elapsedMs = System.currentTimeMillis() - queryStart;
+
                     if (recipientPubKey == null) {
+                        boolean connectedAfter = sharedNostrClient.isConnected();
+                        // SDK query timeout is configured at 10s (see setQueryTimeoutMs above).
+                        // If we come back null at ~that duration, it was a timeout, not a real miss.
+                        boolean looksLikeTimeout = elapsedMs >= 9_000L;
+                        System.err.println(String.format(
+                                "❌ Nametag resolve returned null for '%s' — elapsed=%dms, connectedBefore=%s, connectedAfter=%s",
+                                unicityId, elapsedMs, connectedBefore, connectedAfter));
+
+                        if (!connectedAfter) {
+                            throw new RuntimeException("Nametag resolution failed: Nostr relay dropped during query");
+                        }
+                        if (looksLikeTimeout) {
+                            throw new RuntimeException("Nametag resolution timed out (10s): " + unicityId);
+                        }
                         throw new RuntimeException("Nametag not found: " + unicityId);
                     }
-                    System.out.println("✅ Resolved nametag '" + unicityId + "' to: " + recipientPubKey.substring(0, 16) + "...");
+                    System.out.println("✅ Resolved nametag '" + unicityId + "' to: " + recipientPubKey.substring(0, 16)
+                            + "... (elapsed=" + elapsedMs + "ms)");
                     request.setRecipientNostrPubkey(recipientPubKey);
                     database.updateRequest(request);
                 } catch (Exception e) {
