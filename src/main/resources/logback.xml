@@ -29,6 +29,14 @@
         <appender-ref ref="FILE"/>
     </logger>
 
+    <!--
+         Faucet code default: INFO. Flip to TRACE to see per-step mint/transfer
+         internals (submitting commitment, waiting for inclusion proof, etc.)
+         without touching source. Can also be overridden per class, e.g.:
+           <logger name="org.unicitylabs.faucet.TokenMinter" level="TRACE"/>
+    -->
+    <logger name="org.unicitylabs.faucet" level="INFO"/>
+
     <!-- Reduce SDK logging verbosity -->
     <logger name="org.unicitylabs.sdk" level="WARN" additivity="false">
         <appender-ref ref="CONSOLE"/>

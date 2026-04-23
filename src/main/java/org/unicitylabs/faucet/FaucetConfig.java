@@ -2,6 +2,8 @@ package org.unicitylabs.faucet;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,6 +13,8 @@ import java.io.InputStream;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class FaucetConfig {
+
+    private static final Logger logger = LoggerFactory.getLogger(FaucetConfig.class);
 
     public String registryUrl;    // URL to unicity-ids registry JSON
     public String nostrRelay;
@@ -38,13 +42,13 @@ public class FaucetConfig {
         String envMnemonic = System.getenv("FAUCET_MNEMONIC");
         if (envMnemonic != null && !envMnemonic.trim().isEmpty()) {
             config.faucetMnemonic = envMnemonic.trim();
-            System.out.println("✅ Using FAUCET_MNEMONIC from environment variable");
+            logger.info("Using FAUCET_MNEMONIC from environment variable");
         }
 
         String envApiKey = System.getenv("AGGREGATOR_API_KEY");
         if (envApiKey != null && !envApiKey.trim().isEmpty()) {
             config.aggregatorApiKey = envApiKey.trim();
-            System.out.println("✅ Using AGGREGATOR_API_KEY from environment variable");
+            logger.info("Using AGGREGATOR_API_KEY from environment variable");
         }
 
         // Validate mnemonic is set

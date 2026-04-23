@@ -7,12 +7,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.sqlite.SQLiteConfig;
 
 /**
  * Database access layer for faucet requests
  */
 public class FaucetDatabase {
+
+    private static final Logger logger = LoggerFactory.getLogger(FaucetDatabase.class);
 
     private final String dbPath;
     private final SQLiteConfig connectionConfig;
@@ -58,7 +62,7 @@ public class FaucetDatabase {
         try (Connection conn = openConnection();
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(createTableSQL);
-            System.out.println("✅ Database initialized: " + dbPath);
+            logger.info("Database initialized: {}", dbPath);
         } catch (SQLException e) {
             throw new RuntimeException("Failed to initialize database", e);
         }

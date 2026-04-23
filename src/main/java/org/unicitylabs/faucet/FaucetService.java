@@ -1,5 +1,7 @@
 package org.unicitylabs.faucet;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.unicitylabs.faucet.db.FaucetDatabase;
 import org.unicitylabs.faucet.db.FaucetRequest;
 import org.unicitylabs.nostr.client.NostrClient;
@@ -24,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * connection/disconnection races when handling concurrent requests.
  */
 public class FaucetService {
+
+    private static final Logger logger = LoggerFactory.getLogger(FaucetService.class);
 
     private final FaucetConfig config;
     private final byte[] faucetPrivateKey;
@@ -74,30 +78,30 @@ public class FaucetService {
         this.sharedNostrClient.addConnectionListener(new NostrClient.ConnectionEventListener() {
             @Override
             public void onConnect(String relayUrl) {
-                System.out.println("✅ Nostr connected to: " + relayUrl);
+                logger.info("Nostr connected to {}", relayUrl);
                 nostrConnected.set(true);
             }
 
             @Override
             public void onDisconnect(String relayUrl, String reason) {
-                System.out.println("⚠️ Nostr disconnected from " + relayUrl + ": " + reason);
+                logger.warn("Nostr disconnected from {}: {}", relayUrl, reason);
                 nostrConnected.set(false);
             }
 
             @Override
             public void onReconnecting(String relayUrl, int attempt) {
-                System.out.println("🔄 Nostr reconnecting to " + relayUrl + " (attempt " + attempt + ")...");
+                logger.info("Nostr reconnecting to {} (attempt {})", relayUrl, attempt);
             }
 
             @Override
             public void onReconnected(String relayUrl) {
-                System.out.println("✅ Nostr reconnected to: " + relayUrl);
+                logger.info("Nostr reconnected to {}", relayUrl);
                 nostrConnected.set(true);
             }
         });
 
         // Connect to relay at startup
-        System.out.println("🔌 Connecting to Nostr relay: " + config.nostrRelay);
+        logger.info("Connecting to Nostr relay: {}", config.nostrRelay);
         this.sharedNostrClient.connect(config.nostrRelay).join();
     }
 
@@ -159,11 +163,11 @@ public class FaucetService {
                 // Step 1: Resolve nametag to Nostr public key using shared client
                 String recipientPubKey;
                 try {
-                    System.out.println("🔍 Resolving nametag via Nostr relay: " + unicityId);
+                    logger.trace("Resolving nametag via Nostr relay: {}", unicityId);
 
                     boolean connectedBefore = sharedNostrClient.isConnected();
                     if (!connectedBefore) {
-                        System.err.println("⚠️  Nostr relay NOT connected at query start for nametag '" + unicityId + "'");
+                        logger.warn("Nostr relay NOT connected at query start for nametag '{}'", unicityId);
                         throw new RuntimeException("Nametag resolution unavailable: Nostr relay disconnected");
                     }
 
@@ -176,9 +180,8 @@ public class FaucetService {
                         // SDK query timeout is configured at 10s (see setQueryTimeoutMs above).
                         // If we come back null at ~that duration, it was a timeout, not a real miss.
                         boolean looksLikeTimeout = elapsedMs >= 9_000L;
-                        System.err.println(String.format(
-                                "❌ Nametag resolve returned null for '%s' — elapsed=%dms, connectedBefore=%s, connectedAfter=%s",
-                                unicityId, elapsedMs, connectedBefore, connectedAfter));
+                        logger.warn("Nametag resolve returned null for '{}' elapsed={}ms connectedBefore={} connectedAfter={}",
+                                unicityId, elapsedMs, connectedBefore, connectedAfter);
 
                         if (!connectedAfter) {
                             throw new RuntimeException("Nametag resolution failed: Nostr relay dropped during query");
@@ -188,8 +191,8 @@ public class FaucetService {
                         }
                         throw new RuntimeException("Nametag not found: " + unicityId);
                     }
-                    System.out.println("✅ Resolved nametag '" + unicityId + "' to: " + recipientPubKey.substring(0, 16)
-                            + "... (elapsed=" + elapsedMs + "ms)");
+                    logger.trace("Resolved nametag '{}' → {} (elapsed={}ms)",
+                            unicityId, recipientPubKey.substring(0, 16), elapsedMs);
                     request.setRecipientNostrPubkey(recipientPubKey);
                     database.updateRequest(request);
                 } catch (Exception e) {
@@ -200,10 +203,13 @@ public class FaucetService {
 
                 // Step 2: Mint token
                 var mintedToken = minter.mintToken(tokenTypeHex, coinDef.id, tokenAmount).join();
+                String tokenIdHex = org.apache.commons.codec.binary.Hex.encodeHexString(
+                        mintedToken.getId().getBytes());
 
                 // Step 3: Create ProxyAddress from nametag
                 TokenId nametagTokenId = TokenId.fromNameTag(unicityId);
                 ProxyAddress recipientProxyAddress = ProxyAddress.create(nametagTokenId);
+                String proxyAddressStr = recipientProxyAddress.getAddress();
 
                 // Step 4: Transfer token to proxy address
                 TokenMinter.TransferInfo transferInfo = minter.transferToProxyAddress(
@@ -236,9 +242,9 @@ public class FaucetService {
                 String transferPackage = createTransferPackage(sourceTokenJson, transferTxJson);
 
                 // Step 8: Send via Nostr using shared client (no connect/disconnect per request)
-                System.out.println("📤 Sending token transfer to " + recipientPubKey.substring(0, 16) + "...");
+                logger.trace("Sending token transfer via Nostr to {}", recipientPubKey.substring(0, 16));
                 sharedNostrClient.sendTokenTransfer(recipientPubKey, transferPackage).join();
-                System.out.println("✅ Token transfer sent successfully");
+                logger.trace("Token transfer sent");
 
                 // Update status to SUCCESS
                 request.setStatus("SUCCESS");
@@ -254,14 +260,15 @@ public class FaucetService {
                         amount,
                         tokenAmount.toString(),
                         recipientPubKey,
-                        tokenFilePath
+                        tokenFilePath,
+                        tokenIdHex,
+                        proxyAddressStr
                 );
 
             } catch (Exception e) {
                 // Extract clean error message
                 String cleanErrorMsg = extractErrorMessage(e);
-                System.err.println("❌ Faucet request failed: " + cleanErrorMsg);
-                e.printStackTrace();
+                logger.error("Faucet request failed: {}", cleanErrorMsg, e);
 
                 // Update status to FAILED
                 if (request != null) {
@@ -270,8 +277,7 @@ public class FaucetService {
                     try {
                         database.updateRequest(request);
                     } catch (Exception dbEx) {
-                        System.err.println("Failed to update request status: " + dbEx.getMessage());
-                        dbEx.printStackTrace();
+                        logger.warn("Failed to update request status", dbEx);
                     }
                 }
 
@@ -283,6 +289,8 @@ public class FaucetService {
                         coinName,
                         null,
                         amount,
+                        null,
+                        null,
                         null,
                         null,
                         null
@@ -332,7 +340,7 @@ public class FaucetService {
      * Shutdown the service and clean up resources
      */
     public void shutdown() {
-        System.out.println("🔌 Shutting down FaucetService...");
+        logger.info("Shutting down FaucetService");
         if (sharedNostrClient != null) {
             sharedNostrClient.disconnect();
         }
@@ -397,11 +405,14 @@ public class FaucetService {
         public final String amountInSmallestUnits;
         public final String recipientNostrPubkey;
         public final String tokenFilePath;
+        public final String tokenIdHex;
+        public final String proxyAddress;
 
         public FaucetRequestResult(boolean success, String message, Long requestId,
                                    String unicityId, String coinName, String coinSymbol,
                                    double amount, String amountInSmallestUnits,
-                                   String recipientNostrPubkey, String tokenFilePath) {
+                                   String recipientNostrPubkey, String tokenFilePath,
+                                   String tokenIdHex, String proxyAddress) {
             this.success = success;
             this.message = message;
             this.requestId = requestId;
@@ -412,6 +423,8 @@ public class FaucetService {
             this.amountInSmallestUnits = amountInSmallestUnits;
             this.recipientNostrPubkey = recipientNostrPubkey;
             this.tokenFilePath = tokenFilePath;
+            this.tokenIdHex = tokenIdHex;
+            this.proxyAddress = proxyAddress;
         }
     }
 }

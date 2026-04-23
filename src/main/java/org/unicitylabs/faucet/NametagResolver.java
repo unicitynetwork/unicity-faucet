@@ -1,5 +1,7 @@
 package org.unicitylabs.faucet;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.unicitylabs.nostr.client.NostrClient;
 import org.unicitylabs.nostr.crypto.NostrKeyManager;
 
@@ -10,6 +12,8 @@ import java.util.concurrent.CompletableFuture;
  * Uses the nametag binding system we implemented
  */
 public class NametagResolver {
+
+    private static final Logger logger = LoggerFactory.getLogger(NametagResolver.class);
 
     private final String relayUrl;
     private final byte[] faucetPrivateKey;
@@ -26,7 +30,7 @@ public class NametagResolver {
      * @return CompletableFuture with the Nostr public key (hex)
      */
     public CompletableFuture<String> resolveNametag(String nametag) {
-        System.out.println("🔍 Resolving nametag via Nostr relay: " + nametag);
+        logger.trace("Resolving nametag via Nostr relay: {}", nametag);
 
         try {
             // Create Nostr client with SDK
@@ -40,7 +44,7 @@ public class NametagResolver {
                     if (pubkey == null) {
                         throw new RuntimeException("Nametag not found: " + nametag);
                     }
-                    System.out.println("✅ Resolved nametag '" + nametag + "' to: " + pubkey.substring(0, 16) + "...");
+                    logger.trace("Resolved nametag '{}' → {}", nametag, pubkey.substring(0, 16));
                     nostrClient.disconnect();
                     return pubkey;
                 })

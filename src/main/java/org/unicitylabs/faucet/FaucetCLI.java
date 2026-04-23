@@ -8,6 +8,8 @@ import picocli.CommandLine.Option;
 import org.unicitylabs.nostr.client.NostrClient;
 import org.unicitylabs.nostr.crypto.NostrKeyManager;
 import org.unicitylabs.nostr.token.TokenTransferProtocol;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
@@ -26,6 +28,8 @@ import java.util.concurrent.CompletableFuture;
     description = "Mint Unicity tokens and send them via Nostr to a nametag recipient"
 )
 public class FaucetCLI implements Callable<Integer> {
+
+    private static final Logger logger = LoggerFactory.getLogger(FaucetCLI.class);
 
     @Option(
         names = {"-n", "--nametag"},
@@ -60,22 +64,22 @@ public class FaucetCLI implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        System.out.println("╔══════════════════════════════════════╗");
-        System.out.println("║   Unicity Token Faucet v1.0.0        ║");
-        System.out.println("╚══════════════════════════════════════╝");
-        System.out.println();
+        logger.info("╔══════════════════════════════════════╗");
+        logger.info("║   Unicity Token Faucet v1.0.0        ║");
+        logger.info("╚══════════════════════════════════════╝");
+        logger.info("");
 
         // Load configuration
         FaucetConfig config = FaucetConfig.load();
-        System.out.println("✅ Configuration loaded");
-        System.out.println("   Relay: " + config.nostrRelay);
-        System.out.println("   Aggregator: " + config.aggregatorUrl);
-        System.out.println("   Registry: " + config.registryUrl);
-        System.out.println();
+        logger.info("✅ Configuration loaded");
+        logger.info("   Relay: " + config.nostrRelay);
+        logger.info("   Aggregator: " + config.aggregatorUrl);
+        logger.info("   Registry: " + config.registryUrl);
+        logger.info("");
 
         // Clear cache if refresh flag is set
         if (refresh) {
-            System.out.println("🔄 Refresh flag set - clearing registry cache...");
+            logger.info("🔄 Refresh flag set - clearing registry cache...");
             UnicityTokenRegistry.clearCache();
         }
 
@@ -85,12 +89,12 @@ public class FaucetCLI implements Callable<Integer> {
         // Get token type from registry (non-fungible "unicity" asset)
         String tokenTypeHex = registry.getUnicityTokenType();
         if (tokenTypeHex == null) {
-            System.err.println("\n❌ Could not find Unicity token type in registry");
+            logger.warn("\n❌ Could not find Unicity token type in registry");
             System.exit(1);
             return 1;
         }
-        System.out.println("📝 Token Type: " + tokenTypeHex);
-        System.out.println();
+        logger.info("📝 Token Type: " + tokenTypeHex);
+        logger.info("");
 
         // Determine which coin to mint
         String coinName = (coin != null) ? coin : config.defaultCoin;
@@ -98,24 +102,24 @@ public class FaucetCLI implements Callable<Integer> {
         // Find the coin definition by name
         UnicityTokenRegistry.CoinDefinition coinDef = registry.getCoinByName(coinName);
         if (coinDef == null) {
-            System.err.println("\n❌ Coin not found: " + coinName);
-            System.err.println("\n📋 Available coins:");
+            logger.warn("\n❌ Coin not found: " + coinName);
+            logger.warn("\n📋 Available coins:");
             for (UnicityTokenRegistry.CoinDefinition c : registry.getFungibleCoins()) {
-                System.err.println("   - " + c.name + " (" + c.symbol + ") - " + c.decimals + " decimals");
+                logger.warn("   - " + c.name + " (" + c.symbol + ") - " + c.decimals + " decimals");
             }
             System.exit(1);
             return 1;
         }
 
-        System.out.println("💎 Coin: " + coinDef.name + " (" + coinDef.symbol + ")");
-        System.out.println("   Decimals: " + coinDef.decimals);
-        System.out.println();
+        logger.info("💎 Coin: " + coinDef.name + " (" + coinDef.symbol + ")");
+        logger.info("   Decimals: " + coinDef.decimals);
+        logger.info("");
 
         // Validate coin ID is different from token type
         if (coinDef.id.equals(tokenTypeHex)) {
-            System.err.println("\n❌ Invalid registry data: Coin ID equals Token Type");
-            System.err.println("   This indicates the registry entry is incorrectly configured.");
-            System.err.println("   Coin '" + coinName + "' should have a unique coin ID, not the token type ID.");
+            logger.warn("\n❌ Invalid registry data: Coin ID equals Token Type");
+            logger.warn("   This indicates the registry entry is incorrectly configured.");
+            logger.warn("   Coin '" + coinName + "' should have a unique coin ID, not the token type ID.");
             System.exit(1);
             return 1;
         }
@@ -135,19 +139,19 @@ public class FaucetCLI implements Callable<Integer> {
 
         // Validate amount is not zero or negative
         if (tokenAmount.compareTo(java.math.BigInteger.ZERO) <= 0) {
-            System.err.println("\n❌ Invalid amount: " + userAmount + " " + coinDef.symbol);
-            System.err.println("   After applying " + decimals + " decimals, the amount becomes " + tokenAmount);
-            System.err.println("   Minimum amount for " + coinDef.symbol + ": " +
+            logger.warn("\n❌ Invalid amount: " + userAmount + " " + coinDef.symbol);
+            logger.warn("   After applying " + decimals + " decimals, the amount becomes " + tokenAmount);
+            logger.warn("   Minimum amount for " + coinDef.symbol + ": " +
                 java.math.BigDecimal.ONE.divide(multiplier) + " " + coinDef.symbol);
             System.exit(1);
             return 1;
         }
 
-        System.out.println("💰 Minting tokens:");
-        System.out.println("   User amount: " + userAmount);
-        System.out.println("   Decimals: " + decimals);
-        System.out.println("   Actual amount (smallest units): " + tokenAmount);
-        System.out.println();
+        logger.info("💰 Minting tokens:");
+        logger.info("   User amount: " + userAmount);
+        logger.info("   Decimals: " + decimals);
+        logger.info("   Actual amount (smallest units): " + tokenAmount);
+        logger.info("");
 
         // Derive private key from mnemonic
         byte[] faucetPrivateKey = mnemonicToPrivateKey(config.faucetMnemonic);
@@ -160,15 +164,15 @@ public class FaucetCLI implements Callable<Integer> {
         } catch (Exception e) {
             Throwable cause = e.getCause();
             String errorMsg = (cause != null) ? cause.getMessage() : e.getMessage();
-            System.err.println("\n❌ " + errorMsg);
-            System.err.println("\nMake sure the wallet user has minted the nametag and published the binding to Nostr.");
+            logger.warn("\n❌ " + errorMsg);
+            logger.warn("\nMake sure the wallet user has minted the nametag and published the binding to Nostr.");
             System.exit(1);
             return 1;
         }
 
         // Step 2: Mint token to faucet
-        System.out.println();
-        System.out.println("🔨 Minting " + userAmount + " " + coinDef.symbol + "...");
+        logger.info("");
+        logger.info("🔨 Minting " + userAmount + " " + coinDef.symbol + "...");
         TokenMinter minter = new TokenMinter(config.aggregatorUrl, faucetPrivateKey, config.getAggregatorApiKey());
         var mintedToken = minter.mintToken(
             tokenTypeHex,  // Token type from registry
@@ -177,13 +181,13 @@ public class FaucetCLI implements Callable<Integer> {
         ).join();
 
         // Step 3: Create ProxyAddress from nametag (deterministic from nametag string)
-        System.out.println();
-        System.out.println("🔍 Creating proxy address from nametag...");
+        logger.info("");
+        logger.info("🔍 Creating proxy address from nametag...");
 
         org.unicitylabs.sdk.token.TokenId nametagTokenId = org.unicitylabs.sdk.token.TokenId.fromNameTag(nametag);
         org.unicitylabs.sdk.address.ProxyAddress recipientProxyAddress = org.unicitylabs.sdk.address.ProxyAddress.create(nametagTokenId);
 
-        System.out.println("✅ Proxy address: " + recipientProxyAddress.getAddress());
+        logger.info("✅ Proxy address: " + recipientProxyAddress.getAddress());
 
         // Step 4: Transfer token to the proxy address
         TokenMinter.TransferInfo transferInfo = minter.transferToProxyAddress(
@@ -199,10 +203,10 @@ public class FaucetCLI implements Callable<Integer> {
         String transferPackage = createTransferPackage(sourceTokenJson, transferTxJson);
 
         // Step 7: Send via Nostr to recipient's Nostr pubkey
-        System.out.println();
-        System.out.println("📨 Sending token transfer package to " + nametag + " via Nostr...");
-        System.out.println("   Nostr pubkey: " + recipientPubKey.substring(0, 16) + "...");
-        System.out.println("   Proxy address: " + recipientProxyAddress.getAddress());
+        logger.info("");
+        logger.info("📨 Sending token transfer package to " + nametag + " via Nostr...");
+        logger.info("   Nostr pubkey: " + recipientPubKey.substring(0, 16) + "...");
+        logger.info("   Proxy address: " + recipientProxyAddress.getAddress());
 
         // Send token transfer using SDK's TokenTransferProtocol
         // This ensures correct event kind (31113) and proper formatting
@@ -215,18 +219,18 @@ public class FaucetCLI implements Callable<Integer> {
 
         nostrClient.disconnect();
 
-        System.out.println();
-        System.out.println("╔══════════════════════════════════════╗");
-        System.out.println("║  ✅ Token sent successfully!         ║");
-        System.out.println("╚══════════════════════════════════════╝");
-        System.out.println();
-        System.out.println("📊 Summary:");
-        System.out.println("   Recipient: " + nametag);
-        System.out.println("   Coin: " + coinDef.name + " (" + coinDef.symbol + ")");
-        System.out.println("   Amount: " + userAmount + " " + coinDef.symbol);
-        System.out.println("   Smallest units: " + tokenAmount);
-        System.out.println("   Delivery: Nostr relay");
-        System.out.println();
+        logger.info("");
+        logger.info("╔══════════════════════════════════════╗");
+        logger.info("║  ✅ Token sent successfully!         ║");
+        logger.info("╚══════════════════════════════════════╝");
+        logger.info("");
+        logger.info("📊 Summary:");
+        logger.info("   Recipient: " + nametag);
+        logger.info("   Coin: " + coinDef.name + " (" + coinDef.symbol + ")");
+        logger.info("   Amount: " + userAmount + " " + coinDef.symbol);
+        logger.info("   Smallest units: " + tokenAmount);
+        logger.info("   Delivery: Nostr relay");
+        logger.info("");
 
         // Clean shutdown
         System.exit(0);

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.staticfiles.Location;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.unicitylabs.faucet.db.FaucetRequest;
 
 import java.util.HashMap;
@@ -15,6 +17,8 @@ import java.util.Map;
  * Provides endpoints for minting and distributing tokens via web interface
  */
 public class FaucetServer {
+
+    private static final Logger logger = LoggerFactory.getLogger(FaucetServer.class);
 
     private final FaucetService faucetService;
     private final ObjectMapper objectMapper;
@@ -59,19 +63,12 @@ public class FaucetServer {
         // Start server
         app.start(port);
 
-        System.out.println("╔══════════════════════════════════════════════════╗");
-        System.out.println("║   Unicity Token Faucet Server v1.0.0             ║");
-        System.out.println("╚══════════════════════════════════════════════════╝");
-        System.out.println();
-        System.out.println("🌐 Server running on http://localhost:" + port);
-        System.out.println("🔗 Aggregator URL: " + aggregatorUrl);
-        System.out.println();
-        System.out.println("📍 Endpoints:");
-        System.out.println("   Web UI:        http://localhost:" + port + "/faucet/index.html");
-        System.out.println("   History:       http://localhost:" + port + "/faucet/history/index.html");
-        System.out.println("   Admin:         http://localhost:" + port + "/faucet/admin/index.html");
-        System.out.println("   API:           http://localhost:" + port + "/api/v1/faucet/");
-        System.out.println();
+        logger.info("Unicity Token Faucet Server v1.0.0 listening on http://localhost:{}", port);
+        logger.info("Aggregator URL: {}", aggregatorUrl);
+        logger.info("Web UI:  http://localhost:{}/faucet/index.html", port);
+        logger.info("History: http://localhost:{}/faucet/history/index.html", port);
+        logger.info("Admin:   http://localhost:{}/faucet/admin/index.html", port);
+        logger.info("API:     http://localhost:{}/api/v1/faucet/", port);
     }
 
     /**
@@ -113,10 +110,7 @@ public class FaucetServer {
      * Request body: {"unicityId": "alice", "coin": "solana", "amount": 0.05}
      */
     private void submitFaucetRequest(Context ctx) {
-        System.out.println("\n════════════════════════════════════════════════════");
-        System.out.println("🔵 POST /api/v1/faucet/request - Request ID: " + System.currentTimeMillis());
-        System.out.println("════════════════════════════════════════════════════\n");
-
+        long reqStart = System.currentTimeMillis();
         try {
             // Parse request body
             Map<String, Object> body = ctx.bodyAsClass(Map.class);
@@ -182,17 +176,17 @@ public class FaucetServer {
                 return;
             }
 
-            System.out.println("📨 Faucet request received:");
-            System.out.println("   Unicity ID: " + unicityId);
-            System.out.println("   Coin: " + coin);
-            System.out.println("   Amount: " + amount);
+            logger.debug("Faucet request received: unicityId={} coin={} amount={}", unicityId, coin, amount);
 
             // Process request synchronously (wait for completion)
             try {
                 var result = faucetService.processFaucetRequest(unicityId, coin, amount).join();
+                long elapsed = System.currentTimeMillis() - reqStart;
 
                 if (result.success) {
-                    System.out.println("✅ Request completed successfully");
+                    logger.info("Faucet OK: unicityId={} coin={} amount={} tokenId={} proxy={} elapsed={}ms",
+                            result.unicityId, result.coinSymbol, result.amount,
+                            result.tokenIdHex, result.proxyAddress, elapsed);
 
                     ctx.json(Map.of(
                             "success", true,
@@ -208,7 +202,8 @@ public class FaucetServer {
                             )
                     ));
                 } else {
-                    System.err.println("❌ Request failed: " + result.message);
+                    logger.warn("Faucet FAIL: unicityId={} coin={} amount={} elapsed={}ms reason={}",
+                            result.unicityId, coin, result.amount, elapsed, result.message);
 
                     // Determine HTTP status code based on error message
                     int statusCode = isUserError(result.message) ? 400 : 500;
@@ -219,8 +214,9 @@ public class FaucetServer {
                     ));
                 }
             } catch (Exception ex) {
-                System.err.println("❌ Unexpected error: " + ex.getMessage());
-                ex.printStackTrace();
+                long elapsed = System.currentTimeMillis() - reqStart;
+                logger.error("Faucet ERROR: unicityId={} coin={} amount={} elapsed={}ms",
+                        unicityId, coin, amount, elapsed, ex);
 
                 ctx.status(500).json(Map.of(
                         "success", false,
@@ -229,8 +225,7 @@ public class FaucetServer {
             }
 
         } catch (Exception e) {
-            System.err.println("❌ Failed to parse request: " + e.getMessage());
-            e.printStackTrace();
+            logger.warn("Failed to parse faucet request", e);
 
             ctx.status(400).json(Map.of(
                     "success", false,
@@ -329,13 +324,13 @@ public class FaucetServer {
         }
 
         try {
-            System.out.println("🔄 Admin request: Refreshing token registry...");
+            logger.info("Admin request: refreshing token registry");
 
             // Refresh registry in-place
             UnicityTokenRegistry.getInstance().refresh();
 
             var coins = faucetService.getSupportedCoins();
-            System.out.println("✅ Registry refreshed: " + coins.length + " coins loaded");
+            logger.info("Registry refreshed: {} coins loaded", coins.length);
 
             ctx.json(Map.of(
                     "success", true,
@@ -343,8 +338,7 @@ public class FaucetServer {
                     "coinsLoaded", coins.length
             ));
         } catch (Exception e) {
-            System.err.println("❌ Failed to refresh registry: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Failed to refresh registry", e);
 
             ctx.status(500).json(Map.of(
                     "success", false,
@@ -409,8 +403,7 @@ public class FaucetServer {
                     )
             ));
         } catch (Exception e) {
-            System.err.println("❌ Failed to load stats: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Failed to load stats", e);
             ctx.status(500).json(Map.of(
                     "success", false,
                     "error", "Failed to load stats: " + e.getMessage()
@@ -489,13 +482,13 @@ public class FaucetServer {
             // Get API key from environment
             String apiKey = System.getenv("FAUCET_API_KEY");
             if (apiKey == null || apiKey.trim().isEmpty()) {
-                System.err.println("⚠️  WARNING: FAUCET_API_KEY not set, using default key");
+                logger.warn("FAUCET_API_KEY not set, using default key");
                 apiKey = "change-me-in-production";
             }
 
             // Show first 5 chars of API key for verification
             String apiKeyPreview = apiKey.length() >= 5 ? apiKey.substring(0, 5) + "..." : apiKey;
-            System.out.println("🔑 API Key: " + apiKeyPreview);
+            logger.info("API Key: {}", apiKeyPreview);
 
             // Get port from environment or use default
             int port = 8080;
@@ -504,14 +497,14 @@ public class FaucetServer {
                 try {
                     port = Integer.parseInt(portEnv);
                 } catch (NumberFormatException e) {
-                    System.err.println("⚠️  Invalid PORT value, using default: 8080");
+                    logger.warn("Invalid PORT value, using default: 8080");
                 }
             }
 
             // Show first 5 chars of mnemonic for verification
             String mnemonicPreview = config.faucetMnemonic.length() >= 5 ?
                 config.faucetMnemonic.substring(0, 5) + "..." : config.faucetMnemonic;
-            System.out.println("🔐 Mnemonic: " + mnemonicPreview);
+            logger.info("Mnemonic: {}", mnemonicPreview);
 
             // Initialize faucet service
             FaucetService faucetService = new FaucetService(config, dataDir);
@@ -521,8 +514,7 @@ public class FaucetServer {
             server.start();
 
         } catch (Exception e) {
-            System.err.println("❌ Failed to start server: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Failed to start server", e);
             System.exit(1);
         }
     }

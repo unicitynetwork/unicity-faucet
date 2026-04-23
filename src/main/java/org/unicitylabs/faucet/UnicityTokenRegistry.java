@@ -10,12 +10,16 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Registry for Unicity token/coin definitions
  * Caches metadata from configurable registry URL
  */
 public class UnicityTokenRegistry {
+
+    private static final Logger logger = LoggerFactory.getLogger(UnicityTokenRegistry.class);
 
     private static final String CACHE_FILE = System.getProperty("user.home") + "/.unicity/registry-cache.json";
     private static final long CACHE_VALIDITY_HOURS = 24;
@@ -74,14 +78,14 @@ public class UnicityTokenRegistry {
         // Try to load from cache first
         File cacheFile = new File(CACHE_FILE);
         if (cacheFile.exists() && !isCacheStale(cacheFile)) {
-            System.out.println("📦 Loading registry from cache...");
+            logger.info("Loading registry from cache: {}", CACHE_FILE);
             definitions = mapper.readValue(
                 cacheFile,
                 mapper.getTypeFactory().constructCollectionType(List.class, CoinDefinition.class)
             );
         } else {
             // Fetch from configured URL
-            System.out.println("🌐 Fetching registry from: " + url);
+            logger.info("Fetching registry from: {}", url);
             URL registryURL = new URL(url);
             definitions = mapper.readValue(
                 registryURL,
@@ -98,7 +102,7 @@ public class UnicityTokenRegistry {
             coinsById.put(def.id, def);
         }
 
-        System.out.println("✅ Token registry loaded: " + coinsById.size() + " definitions");
+        logger.info("Token registry loaded: {} definitions", coinsById.size());
     }
 
     private boolean isCacheStale(File cacheFile) {
@@ -112,9 +116,9 @@ public class UnicityTokenRegistry {
             File cacheFile = new File(CACHE_FILE);
             cacheFile.getParentFile().mkdirs(); // Create ~/.unicity directory if needed
             mapper.writeValue(cacheFile, definitions);
-            System.out.println("💾 Registry cached to: " + CACHE_FILE);
+            logger.debug("Registry cached to: {}", CACHE_FILE);
         } catch (IOException e) {
-            System.err.println("⚠️  Failed to cache registry: " + e.getMessage());
+            logger.warn("Failed to cache registry", e);
         }
     }
 
@@ -126,12 +130,12 @@ public class UnicityTokenRegistry {
         if (cacheFile.exists()) {
             boolean deleted = cacheFile.delete();
             if (deleted) {
-                System.out.println("✅ Registry cache cleared: " + CACHE_FILE);
+                logger.info("Registry cache cleared: {}", CACHE_FILE);
             } else {
-                System.err.println("⚠️  Failed to delete cache file: " + CACHE_FILE);
+                logger.warn("Failed to delete cache file: {}", CACHE_FILE);
             }
         } else {
-            System.out.println("ℹ️  No cache file to clear");
+            logger.debug("No cache file to clear");
         }
     }
 
@@ -143,7 +147,7 @@ public class UnicityTokenRegistry {
         clearCache();
 
         ObjectMapper mapper = new ObjectMapper();
-        System.out.println("🌐 Refreshing registry from: " + registryUrl);
+        logger.info("Refreshing registry from: {}", registryUrl);
         URL url = new URL(registryUrl);
         List<CoinDefinition> definitions = mapper.readValue(
             url,
@@ -159,7 +163,7 @@ public class UnicityTokenRegistry {
             coinsById.put(def.id, def);
         }
 
-        System.out.println("✅ Registry refreshed: " + coinsById.size() + " definitions");
+        logger.info("Registry refreshed: {} definitions", coinsById.size());
     }
 
     /**
@@ -207,7 +211,7 @@ public class UnicityTokenRegistry {
         }
 
         // Not found in cache - refresh this instance (don't replace singleton)
-        System.out.println("⚠️  Fungible coin '" + name + "' not found in cache, refreshing from online registry...");
+        logger.info("Fungible coin '{}' not found in cache, refreshing from online registry", name);
         refresh();
 
         // Search again after refresh - ONLY fungible assets
@@ -215,7 +219,7 @@ public class UnicityTokenRegistry {
             if ("fungible".equals(coin.assetKind) &&
                 coin.name != null &&
                 coin.name.equalsIgnoreCase(name)) {
-                System.out.println("✅ Found fungible coin '" + name + "' after refresh");
+                logger.info("Found fungible coin '{}' after refresh", name);
                 return coin;
             }
         }
