@@ -22,7 +22,11 @@ services:
 
       # Server port
       PORT: 8080
-
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     volumes:
       # Mount data directory for persistence
       - ./data:/app/data

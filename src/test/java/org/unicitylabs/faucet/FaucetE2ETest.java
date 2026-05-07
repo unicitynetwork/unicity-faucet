@@ -166,6 +166,10 @@ public class FaucetE2ETest {
 
         assertTrue("Nametag binding should be published", bindingPublished);
         System.out.println("✅ Alice's nametag binding published!");
+
+        // Hold the publishing connection open briefly so the relay finishes committing
+        // before the WS closes. Closing immediately after OK has been observed to drop the event.
+        Thread.sleep(2_000);
         aliceNostrClient.disconnect();
 
         // Step 2.6: Test nametag resolution using NametagResolver
@@ -174,7 +178,21 @@ public class FaucetE2ETest {
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         NametagResolver resolver = new NametagResolver(NOSTR_RELAY, faucetPrivateKey);
-        String resolvedPubkey = resolver.resolveNametag(aliceNametag).join();
+        String resolvedPubkey = null;
+        int attempts = 6;
+        for (int i = 1; i <= attempts; i++) {
+            try {
+                resolvedPubkey = resolver.resolveNametag(aliceNametag).join();
+                if (resolvedPubkey != null) {
+                    System.out.println("   resolved on attempt " + i);
+                    break;
+                }
+            } catch (Exception e) {
+                System.out.println("   attempt " + i + "/" + attempts + " failed: " + e.getMessage());
+                if (i == attempts) throw e;
+            }
+            Thread.sleep(2_000);
+        }
         assertNotNull("Resolved pubkey should not be null", resolvedPubkey);
         assertEquals("Resolved pubkey should match Alice's pubkey", aliceNostrPubKey, resolvedPubkey);
         System.out.println("✅ NametagResolver successfully looked up Alice's pubkey!");
