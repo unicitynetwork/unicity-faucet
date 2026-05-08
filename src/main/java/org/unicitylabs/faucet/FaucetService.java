@@ -51,7 +51,7 @@ public class FaucetService {
     // instead of each opening its own subscription. Without this, a 5-coin
     // top-up burst opened 5 simultaneous REQs on the shared Nostr connection
     // and tripped the relay's per-connection subscription cap.
-    private final ConcurrentHashMap<String, CompletableFuture<String>> nametagInFlight = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CompletableFuture<ResolveResult>> nametagInFlight = new ConcurrentHashMap<>();
 
     public FaucetService(FaucetConfig config, String dataDir) throws Exception {
         this.config = config;
@@ -198,13 +198,22 @@ public class FaucetService {
                         }
 
                         long queryStart = System.currentTimeMillis();
-                        recipientPubKey = resolveNametagDeduplicated(
+                        ResolveResult resolved = resolveNametagDeduplicated(
                                 unicityId,
                                 nametagCache,
                                 nametagInFlight,
                                 () -> sharedNostrClient.queryPubkeyByNametag(unicityId)
                         ).join();
                         long elapsedMs = System.currentTimeMillis() - queryStart;
+                        recipientPubKey = resolved.pubkey;
+                        // The helper re-checks the cache on entry, so a value can come back
+                        // as a hit even though the outer cache.get above missed (a concurrent
+                        // caller populated the cache between the two checks). Reflect that
+                        // in the metric instead of blanket-labeling all this branch as
+                        // "nostr".
+                        if (resolved.fromCache) {
+                            resolvedFromCache = true;
+                        }
 
                         if (recipientPubKey == null) {
                             boolean connectedAfter = sharedNostrClient.isConnected();
@@ -222,8 +231,13 @@ public class FaucetService {
                             }
                             throw new RuntimeException("Nametag not found: " + unicityId);
                         }
-                        logger.trace("Resolved nametag '{}' → {} (elapsed={}ms)",
-                                unicityId, recipientPubKey.substring(0, 16), elapsedMs);
+                        if (!resolvedFromCache) {
+                            logger.trace("Resolved nametag '{}' → {} (elapsed={}ms)",
+                                    unicityId, recipientPubKey.substring(0, 16), elapsedMs);
+                        } else {
+                            logger.trace("Nametag cache hit (race-resolved): {} → {}",
+                                    unicityId, recipientPubKey.substring(0, 16));
+                        }
                         // Cache write happens inside resolveNametagDeduplicated on success.
                     }
                     request.setRecipientNostrPubkey(recipientPubKey);
@@ -387,10 +401,27 @@ public class FaucetService {
     }
 
     /**
+     * Result of {@link #resolveNametagDeduplicated}. {@code fromCache} reports
+     * whether the value came from the in-memory cache (no relay query, no
+     * loader invocation). When the helper joins another caller's in-flight
+     * future the join is treated as a fresh resolution (fromCache=false),
+     * since the relay was queried — just by someone else.
+     */
+    static final class ResolveResult {
+        final String pubkey;
+        final boolean fromCache;
+
+        ResolveResult(String pubkey, boolean fromCache) {
+            this.pubkey = pubkey;
+            this.fromCache = fromCache;
+        }
+    }
+
+    /**
      * Resolve a nametag with cache + in-flight de-duplication.
      *
      * Order of operations:
-     *   1. cache hit            → return immediately
+     *   1. cache hit            → return immediately (fromCache=true)
      *   2. another caller is already loading the same nametag
      *                           → join their future, no new query
      *   3. otherwise            → run the loader exactly once, cache the
@@ -402,21 +433,24 @@ public class FaucetService {
      * exception, or cancellation), regardless of outcome, so the map can
      * never leak entries.
      *
+     * {@code Error}s thrown synchronously by the loader propagate up so
+     * fatal JVM conditions (OOM, etc.) aren't masked into a failed future.
+     *
      * Static so unit tests can drive it with a mock loader without standing
      * up a real NostrClient.
      */
-    static CompletableFuture<String> resolveNametagDeduplicated(
+    static CompletableFuture<ResolveResult> resolveNametagDeduplicated(
             String nametag,
             NametagCache cache,
-            ConcurrentHashMap<String, CompletableFuture<String>> inFlight,
+            ConcurrentHashMap<String, CompletableFuture<ResolveResult>> inFlight,
             Supplier<CompletableFuture<String>> loader) {
         String cached = cache.get(nametag);
         if (cached != null) {
-            return CompletableFuture.completedFuture(cached);
+            return CompletableFuture.completedFuture(new ResolveResult(cached, true));
         }
 
-        CompletableFuture<String> mine = new CompletableFuture<>();
-        CompletableFuture<String> existing = inFlight.putIfAbsent(nametag, mine);
+        CompletableFuture<ResolveResult> mine = new CompletableFuture<>();
+        CompletableFuture<ResolveResult> existing = inFlight.putIfAbsent(nametag, mine);
         if (existing != null) {
             return existing;
         }
@@ -429,24 +463,23 @@ public class FaucetService {
         try {
             CompletableFuture<String> loaded = loader.get();
             if (loaded == null) {
-                mine.completeExceptionally(new NullPointerException(
-                        "loader returned null future for nametag: " + nametag));
-            } else {
-                loaded.whenComplete((pubkey, err) -> {
-                    if (err != null) {
-                        mine.completeExceptionally(err);
-                    } else {
-                        // Only cache successful resolutions. Misses (null) are
-                        // intentionally not cached so a newly-minted nametag
-                        // is resolvable on the next request.
-                        if (pubkey != null) {
-                            cache.put(nametag, pubkey);
-                        }
-                        mine.complete(pubkey);
-                    }
-                });
+                throw new NullPointerException(
+                        "loader returned null future for nametag: " + nametag);
             }
-        } catch (Throwable t) {
+            loaded.whenComplete((pubkey, err) -> {
+                if (err != null) {
+                    mine.completeExceptionally(err);
+                } else {
+                    // Only cache successful resolutions. Misses (null) are
+                    // intentionally not cached so a newly-minted nametag
+                    // is resolvable on the next request.
+                    if (pubkey != null) {
+                        cache.put(nametag, pubkey);
+                    }
+                    mine.complete(new ResolveResult(pubkey, false));
+                }
+            });
+        } catch (Exception t) {
             mine.completeExceptionally(t);
         }
 
