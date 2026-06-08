@@ -13,10 +13,17 @@ import java.io.File;
 import java.io.FileWriter;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
@@ -37,6 +44,13 @@ public class FaucetService {
     private final UnicityTokenRegistry registry;
     private final FaucetDatabase database;
     private final String dataDir;
+
+    // Token JSON files are written one-per-request into date-sharded subdirs
+    // (tokens/yyyy-MM-dd/) so no single directory approaches ext4's ~10M-entry
+    // htree limit, which surfaces as a spurious "No space left on device".
+    // Shards older than this many days are pruned by a daily retention sweep.
+    private static final DateTimeFormatter TOKEN_SHARD_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private final int tokenRetentionDays;
 
     // Shared Nostr client for all requests - stays connected
     private final NostrClient sharedNostrClient;
@@ -63,11 +77,15 @@ public class FaucetService {
             dir.mkdirs();
         }
 
-        // Ensure tokens directory exists
+        // Ensure tokens directory exists (per-day shards are created lazily on write)
         File tokensDir = new File(dataDir + "/tokens");
         if (!tokensDir.exists()) {
             tokensDir.mkdirs();
         }
+
+        // Prune old token shards so the tokens/ tree stays bounded over time
+        this.tokenRetentionDays = resolveTokenRetentionDays();
+        startTokenRetentionSweep();
 
         // Initialize database
         this.database = new FaucetDatabase(dataDir);
@@ -268,10 +286,15 @@ public class FaucetService {
                 String sourceTokenJson = minter.serializeToken(transferInfo.getSourceToken());
                 String transferTxJson = minter.serializeTransaction(transferInfo.getTransferTransaction());
 
-                // Step 6: Save token files
+                // Step 6: Save token files into the current day's shard
+                String shard = LocalDate.now(ZoneOffset.UTC).format(TOKEN_SHARD_FMT);
+                File shardDir = new File(dataDir + "/tokens/" + shard);
+                if (!shardDir.exists()) {
+                    shardDir.mkdirs();
+                }
                 String tokenFileName = String.format("token_%d_%s_%s.json",
                         requestId, unicityId, System.currentTimeMillis());
-                String tokenFilePath = dataDir + "/tokens/" + tokenFileName;
+                String tokenFilePath = shardDir.getPath() + "/" + tokenFileName;
 
                 Map<String, String> tokenData = new HashMap<>();
                 tokenData.put("sourceToken", sourceTokenJson);
@@ -398,6 +421,81 @@ public class FaucetService {
             logger.warn("Invalid FAUCET_NAMETAG_CACHE_TTL_SEC='{}', falling back to 600s", raw);
             return 600_000L;
         }
+    }
+
+    private static int resolveTokenRetentionDays() {
+        String raw = System.getenv("FAUCET_TOKEN_RETENTION_DAYS");
+        if (raw == null || raw.trim().isEmpty()) {
+            return 7; // default: keep one week of token files
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid FAUCET_TOKEN_RETENTION_DAYS='{}', falling back to 7", raw);
+            return 7;
+        }
+    }
+
+    /**
+     * Schedule a daily sweep that deletes token shards older than
+     * {@link #tokenRetentionDays}. Runs shortly after startup and every 24h
+     * thereafter on a daemon thread. A retention of {@code <= 0} disables it.
+     */
+    private void startTokenRetentionSweep() {
+        if (tokenRetentionDays <= 0) {
+            logger.info("Token file retention disabled (FAUCET_TOKEN_RETENTION_DAYS<=0)");
+            return;
+        }
+        ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "token-retention-sweep");
+            t.setDaemon(true);
+            return t;
+        });
+        exec.scheduleAtFixedRate(this::sweepOldTokenShards, 1, TimeUnit.DAYS.toMinutes(1), TimeUnit.MINUTES);
+        logger.info("Token retention sweep enabled: keeping {} day(s) of shards", tokenRetentionDays);
+    }
+
+    /** Delete date-named token shards older than the retention window. */
+    private void sweepOldTokenShards() {
+        try {
+            File tokensRoot = new File(dataDir + "/tokens");
+            File[] shards = tokensRoot.listFiles(File::isDirectory);
+            if (shards == null) {
+                return;
+            }
+            LocalDate cutoff = LocalDate.now(ZoneOffset.UTC).minusDays(tokenRetentionDays);
+            for (File shard : shards) {
+                LocalDate shardDate;
+                try {
+                    shardDate = LocalDate.parse(shard.getName(), TOKEN_SHARD_FMT);
+                } catch (DateTimeParseException e) {
+                    continue; // not a date shard — leave anything else untouched
+                }
+                if (shardDate.isBefore(cutoff)) {
+                    int deleted = deleteDirRecursively(shard);
+                    logger.info("Token retention: pruned shard {} ({} files)", shard.getName(), deleted);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Token retention sweep failed: {}", e.getMessage());
+        }
+    }
+
+    /** Recursively delete a directory; returns the number of files removed. */
+    private static int deleteDirRecursively(File dir) {
+        int count = 0;
+        File[] entries = dir.listFiles();
+        if (entries != null) {
+            for (File entry : entries) {
+                if (entry.isDirectory()) {
+                    count += deleteDirRecursively(entry);
+                } else if (entry.delete()) {
+                    count++;
+                }
+            }
+        }
+        dir.delete();
+        return count;
     }
 
     /**
