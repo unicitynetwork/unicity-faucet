@@ -455,34 +455,47 @@ public class FaucetService {
         logger.info("Token retention sweep enabled: keeping {} day(s) of shards", tokenRetentionDays);
     }
 
-    /** Delete date-named token shards older than the retention window. */
     private void sweepOldTokenShards() {
         try {
-            File tokensRoot = new File(dataDir + "/tokens");
-            File[] shards = tokensRoot.listFiles(File::isDirectory);
-            if (shards == null) {
-                return;
-            }
-            LocalDate cutoff = LocalDate.now(ZoneOffset.UTC).minusDays(tokenRetentionDays);
-            for (File shard : shards) {
-                LocalDate shardDate;
-                try {
-                    shardDate = LocalDate.parse(shard.getName(), TOKEN_SHARD_FMT);
-                } catch (DateTimeParseException e) {
-                    continue; // not a date shard — leave anything else untouched
-                }
-                if (shardDate.isBefore(cutoff)) {
-                    int deleted = deleteDirRecursively(shard);
-                    logger.info("Token retention: pruned shard {} ({} files)", shard.getName(), deleted);
-                }
-            }
+            pruneOldTokenShards(new File(dataDir + "/tokens"), tokenRetentionDays,
+                    LocalDate.now(ZoneOffset.UTC));
         } catch (Exception e) {
             logger.warn("Token retention sweep failed: {}", e.getMessage());
         }
     }
 
+    /**
+     * Delete date-named token shards under {@code tokensRoot} whose date is more
+     * than {@code retentionDays} days before {@code today}. Non-date-named
+     * entries (and loose files) are left untouched. Returns the names of the
+     * shards that were pruned. Package-private and static so it can be unit
+     * tested without constructing a {@link FaucetService}.
+     */
+    static java.util.List<String> pruneOldTokenShards(File tokensRoot, int retentionDays, LocalDate today) {
+        java.util.List<String> pruned = new java.util.ArrayList<>();
+        File[] shards = tokensRoot.listFiles(File::isDirectory);
+        if (shards == null) {
+            return pruned;
+        }
+        LocalDate cutoff = today.minusDays(retentionDays);
+        for (File shard : shards) {
+            LocalDate shardDate;
+            try {
+                shardDate = LocalDate.parse(shard.getName(), TOKEN_SHARD_FMT);
+            } catch (DateTimeParseException e) {
+                continue; // not a date shard — leave anything else untouched
+            }
+            if (shardDate.isBefore(cutoff)) {
+                int deleted = deleteDirRecursively(shard);
+                pruned.add(shard.getName());
+                logger.info("Token retention: pruned shard {} ({} files)", shard.getName(), deleted);
+            }
+        }
+        return pruned;
+    }
+
     /** Recursively delete a directory; returns the number of files removed. */
-    private static int deleteDirRecursively(File dir) {
+    static int deleteDirRecursively(File dir) {
         int count = 0;
         File[] entries = dir.listFiles();
         if (entries != null) {
