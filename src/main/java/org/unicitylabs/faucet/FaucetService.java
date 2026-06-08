@@ -51,6 +51,7 @@ public class FaucetService {
     // Shards older than this many days are pruned by a daily retention sweep.
     private static final DateTimeFormatter TOKEN_SHARD_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private final int tokenRetentionDays;
+    private final ScheduledExecutorService retentionExecutor;
 
     // Shared Nostr client for all requests - stays connected
     private final NostrClient sharedNostrClient;
@@ -85,7 +86,7 @@ public class FaucetService {
 
         // Prune old token shards so the tokens/ tree stays bounded over time
         this.tokenRetentionDays = resolveTokenRetentionDays();
-        startTokenRetentionSweep();
+        this.retentionExecutor = startTokenRetentionSweep();
 
         // Initialize database
         this.database = new FaucetDatabase(dataDir);
@@ -289,8 +290,8 @@ public class FaucetService {
                 // Step 6: Save token files into the current day's shard
                 String shard = LocalDate.now(ZoneOffset.UTC).format(TOKEN_SHARD_FMT);
                 File shardDir = new File(dataDir + "/tokens/" + shard);
-                if (!shardDir.exists()) {
-                    shardDir.mkdirs();
+                if (!shardDir.mkdirs() && !shardDir.isDirectory()) {
+                    throw new RuntimeException("Failed to create token shard directory: " + shardDir.getPath());
                 }
                 String tokenFileName = String.format("token_%d_%s_%s.json",
                         requestId, unicityId, System.currentTimeMillis());
@@ -441,10 +442,10 @@ public class FaucetService {
      * {@link #tokenRetentionDays}. Runs shortly after startup and every 24h
      * thereafter on a daemon thread. A retention of {@code <= 0} disables it.
      */
-    private void startTokenRetentionSweep() {
+    private ScheduledExecutorService startTokenRetentionSweep() {
         if (tokenRetentionDays <= 0) {
             logger.info("Token file retention disabled (FAUCET_TOKEN_RETENTION_DAYS<=0)");
-            return;
+            return null;
         }
         ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "token-retention-sweep");
@@ -453,6 +454,7 @@ public class FaucetService {
         });
         exec.scheduleAtFixedRate(this::sweepOldTokenShards, 1, TimeUnit.DAYS.toMinutes(1), TimeUnit.MINUTES);
         logger.info("Token retention sweep enabled: keeping {} day(s) of shards", tokenRetentionDays);
+        return exec;
     }
 
     private void sweepOldTokenShards() {
@@ -460,19 +462,25 @@ public class FaucetService {
             pruneOldTokenShards(new File(dataDir + "/tokens"), tokenRetentionDays,
                     LocalDate.now(ZoneOffset.UTC));
         } catch (Exception e) {
-            logger.warn("Token retention sweep failed: {}", e.getMessage());
+            logger.warn("Token retention sweep failed", e);
         }
     }
 
     /**
      * Delete date-named token shards under {@code tokensRoot} whose date is more
-     * than {@code retentionDays} days before {@code today}. Non-date-named
-     * entries (and loose files) are left untouched. Returns the names of the
-     * shards that were pruned. Package-private and static so it can be unit
-     * tested without constructing a {@link FaucetService}.
+     * than {@code retentionDays} days before {@code today}. A {@code retentionDays}
+     * of {@code <= 0} disables pruning and is a no-op, matching the documented
+     * FAUCET_TOKEN_RETENTION_DAYS contract. Non-date-named entries (and loose
+     * files) are left untouched, and a shard is only reported as pruned if its
+     * directory was actually removed. Returns the names of the shards that were
+     * pruned. Package-private and static so it can be unit tested without
+     * constructing a {@link FaucetService}.
      */
     static java.util.List<String> pruneOldTokenShards(File tokensRoot, int retentionDays, LocalDate today) {
         java.util.List<String> pruned = new java.util.ArrayList<>();
+        if (retentionDays <= 0) {
+            return pruned; // pruning disabled
+        }
         File[] shards = tokensRoot.listFiles(File::isDirectory);
         if (shards == null) {
             return pruned;
@@ -487,8 +495,13 @@ public class FaucetService {
             }
             if (shardDate.isBefore(cutoff)) {
                 int deleted = deleteDirRecursively(shard);
-                pruned.add(shard.getName());
-                logger.info("Token retention: pruned shard {} ({} files)", shard.getName(), deleted);
+                if (shard.exists()) {
+                    logger.warn("Token retention: shard {} only partially pruned ({} files removed, dir remains)",
+                            shard.getName(), deleted);
+                } else {
+                    pruned.add(shard.getName());
+                    logger.info("Token retention: pruned shard {} ({} files)", shard.getName(), deleted);
+                }
             }
         }
         return pruned;
@@ -607,6 +620,17 @@ public class FaucetService {
      */
     public void shutdown() {
         logger.info("Shutting down FaucetService");
+        if (retentionExecutor != null) {
+            retentionExecutor.shutdown();
+            try {
+                if (!retentionExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    retentionExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                retentionExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
         if (sharedNostrClient != null) {
             sharedNostrClient.disconnect();
         }

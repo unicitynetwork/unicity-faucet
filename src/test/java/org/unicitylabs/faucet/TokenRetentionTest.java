@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.junit.Assert.*;
+import static org.junit.Assume.assumeTrue;
 
 /**
  * Unit tests for the token-file retention sweep. These verify the pure pruning
@@ -71,18 +72,36 @@ public class TokenRetentionTest {
     }
 
     @Test
-    public void retentionZeroPrunesEverythingBeforeToday() throws Exception {
+    public void retentionZeroDisablesPruning() throws Exception {
         File tokensRoot = tmp.newFolder("tokens");
         LocalDate today = LocalDate.of(2026, 6, 8);
 
+        File ancient = shard(tokensRoot, "2020-01-01", 1);
         File yesterday = shard(tokensRoot, "2026-06-07", 1);
-        File todayShard = shard(tokensRoot, "2026-06-08", 1);
 
         List<String> pruned = FaucetService.pruneOldTokenShards(tokensRoot, 0, today);
 
-        assertEquals(1, pruned.size());
-        assertFalse("yesterday is before cutoff(today)", yesterday.exists());
-        assertTrue("today's shard is not before cutoff", todayShard.exists());
+        assertTrue("retention=0 must disable pruning", pruned.isEmpty());
+        assertTrue("nothing should be deleted when disabled", ancient.exists());
+        assertTrue(yesterday.exists());
+    }
+
+    @Test
+    public void partiallyPrunedShardIsNotReportedAsPruned() throws Exception {
+        File tokensRoot = tmp.newFolder("tokens");
+        File old = shard(tokensRoot, "2020-01-01", 1);
+        // Block deletion by making the shard dir non-writable (a file can't be
+        // removed unless its parent dir is writable). Skip where this isn't
+        // honored (e.g. running as root).
+        assumeTrue("filesystem honors read-only dir", old.setWritable(false, false));
+        try {
+            List<String> pruned = FaucetService.pruneOldTokenShards(
+                    tokensRoot, 7, LocalDate.of(2026, 6, 8));
+            assumeTrue("deletion was actually blocked", old.exists());
+            assertTrue("partially-pruned shard must not be reported as pruned", pruned.isEmpty());
+        } finally {
+            old.setWritable(true, false); // allow TemporaryFolder cleanup
+        }
     }
 
     @Test
